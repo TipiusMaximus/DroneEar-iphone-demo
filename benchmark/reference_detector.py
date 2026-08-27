@@ -28,11 +28,74 @@ class DetectorConfig:
     weight_consistency: float = 0.15
     weight_track: float = 0.15
     weight_band: float = 0.10
+    # Octave / harmonic-collapse preference: when the top lattice score is at
+    # ~2x or ~3x a competitive lower-f0 candidate, prefer the lower f0 so a
+    # harmonic is not treated as the rotor fundamental.
+    octave_score_margin: float = 0.05   # accept alt if score >= best - margin
+    octave_score_ratio: float = 0.92    # or score >= ratio * best
+    octave_rel_tol: float = 0.04        # f0_alt within 4% of best/k
+    octave_bin_tol: float = 2.0         # or within this many FFT bins
+    octave_multiples: tuple = (2, 3)    # check best/2 and best/3
+    # Only fold a winner that already sits above the rotor band. Otherwise a
+    # true ~140 Hz lattice can be halved to ~70 Hz when 2x scores similarly,
+    # which hurts 1 m tracking without helping 10/30 m (those half-f0s score 0).
+    octave_apply_above_hz: float = 200.0
 
 STATE_RANK = {"CLEAR": 0, "POSSIBLE": 1, "DETECTED": 2}
 
 def clip01(v):
     return float(np.clip(v, 0.0, 1.0))
+
+
+def prefer_lower_octave_candidate(scored, best, cfg, bin_hz):
+    """Prefer lower f0 when it is ~best/2 or ~best/3 and scores nearly as well.
+
+    Concrete rule: after picking the max-harmonicScore candidate, if another
+    candidate at approximately best_f0/k (k in octave_multiples) has
+    score >= best - octave_score_margin OR score >= octave_score_ratio * best,
+    and its hits/consistency are competitive, prefer that lower f0. Repeat a
+    few times so 3x->1.5x-style chains can collapse toward the fundamental.
+    """
+    if best is None or not scored:
+        return best
+    preferred = best
+    for _ in range(3):
+        best_score = float(preferred["harmonic_score"])
+        best_f0 = float(preferred["best_f0"])
+        if best_f0 <= 0.0 or best_score <= 0.0:
+            break
+        if best_f0 <= cfg.octave_apply_above_hz:
+            break
+        nxt = preferred
+        for k in cfg.octave_multiples:
+            target = best_f0 / float(k)
+            if target < cfg.f0_min:
+                continue
+            tol = max(cfg.octave_rel_tol * target, cfg.octave_bin_tol * bin_hz)
+            for cand in scored:
+                f0 = float(cand["best_f0"])
+                if abs(f0 - target) > tol:
+                    continue
+                s = float(cand["harmonic_score"])
+                close_enough = (
+                    s >= best_score - cfg.octave_score_margin
+                    or s >= cfg.octave_score_ratio * best_score
+                )
+                if not close_enough:
+                    continue
+                competitive_struct = (
+                    int(cand["harmonic_hits"]) >= int(preferred["harmonic_hits"]) - 1
+                    or float(cand["harmonic_consistency"])
+                    >= float(preferred["harmonic_consistency"]) - 0.17
+                )
+                if not competitive_struct and s < best_score - 0.02:
+                    continue
+                if f0 < float(nxt["best_f0"]) - 1e-9:
+                    nxt = cand
+        if nxt is preferred:
+            break
+        preferred = nxt
+    return preferred
 
 def pcm_to_float(x):
     x = np.asarray(x)
@@ -81,7 +144,8 @@ def analyze_frame(frame, cfg):
     mechanical_band_score = clip01(float(power[mechanical].sum()) / total_power)
 
     candidates = freqs[(freqs >= cfg.f0_min) & (freqs <= cfg.f0_max)]
-    best = None
+    bin_hz = float(freqs[1] - freqs[0]) if len(freqs) > 1 else float(cfg.sample_rate) / float(cfg.n_fft)
+    scored = []
 
     for f0 in candidates:
         harmonic_power = 0.0
@@ -130,7 +194,7 @@ def analyze_frame(frame, cfg):
             + 0.25 * contrast_norm
         ))
 
-        item = {
+        scored.append({
             "best_f0": float(f0),
             "harmonic_score": harmonic_score,
             "harmonic_energy_ratio": energy_ratio,
@@ -139,9 +203,12 @@ def analyze_frame(frame, cfg):
             "harmonic_consistency": float(consistency),
             "harmonic_contrast_db": float(contrast_db),
             "harmonic_contrast_norm": float(contrast_norm),
-        }
-        if best is None or item["harmonic_score"] > best["harmonic_score"]:
-            best = item
+        })
+
+    best = None
+    if scored:
+        best = max(scored, key=lambda c: c["harmonic_score"])
+        best = prefer_lower_octave_candidate(scored, best, cfg, bin_hz)
 
     if best is None:
         best = {
