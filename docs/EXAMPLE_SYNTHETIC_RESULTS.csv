@@ -1,0 +1,6 @@
+file,label,source,category,distance_m,frames,mean_score,p95_score,max_score,detected_fraction,max_state,median_best_f0,median_harmonic_consistency,median_harmonic_contrast_db,median_track_stability
+example_data/synthetic/harmonic_90.wav,drone_like_synthetic,synthetic,synthetic_harmonic,,90,0.9981258748426688,0.9998032198006624,0.9998069529956632,0.6555555555555556,DETECTED,89.84375,1.0,43.2018989038757,1.0
+example_data/synthetic/harmonic_sweep_80_110.wav,drone_like_synthetic,synthetic,synthetic_harmonic_sweep,,90,0.9980593941989914,0.9997664830583093,0.9997739352680285,0.6555555555555556,DETECTED,93.75,1.0,42.33831110034881,1.0
+example_data/synthetic/single_sine_90.wav,no_drone,synthetic,single_sine,,90,0.12999999986269337,0.1299999998626941,0.1299999998626941,0.0,CLEAR,62.5,0.0,-2.4081366182337893,0.2
+example_data/synthetic/white_noise.wav,no_drone,synthetic,white_noise,,90,0.11466278081164807,0.23316106763757255,0.2425736819020938,0.0,CLEAR,62.5,0.25,1.922688609665718,0.2
+example_data/synthetic/am_noise.wav,no_drone,synthetic,am_noise,,90,0.13197190130963704,0.24671367012694168,0.39741840698283154,0.0,CLEAR,74.21875,0.3333333333333333,2.6501161986133672,0.2

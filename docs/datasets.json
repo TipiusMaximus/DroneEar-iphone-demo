@@ -1,0 +1,55 @@
+{
+  "version": "0.1",
+  "default_small_real": {
+    "record": "https://zenodo.org/records/7329733",
+    "approx_download_mb": 83,
+    "files": [
+      {
+        "name": "DroneNoise1meter.WAV",
+        "url": "https://zenodo.org/records/7329733/files/DroneNoise1meter.WAV?download=1",
+        "md5": "9ef4719065f1a5fcb973d4ee604204e2",
+        "label": "drone",
+        "distance_m": 1
+      },
+      {
+        "name": "DroneNoise10meter.wav",
+        "url": "https://zenodo.org/records/7329733/files/DroneNoise10meter.wav?download=1",
+        "md5": "837201f716beb629de2d8fa7603a1788",
+        "label": "drone",
+        "distance_m": 10
+      },
+      {
+        "name": "DroneNoise30meter.wav",
+        "url": "https://zenodo.org/records/7329733/files/DroneNoise30meter.wav?download=1",
+        "md5": "12a9bbffa61a64603d022c46a7b77c37",
+        "label": "drone",
+        "distance_m": 30
+      },
+      {
+        "name": "Noisefloor.wav",
+        "url": "https://zenodo.org/records/7329733/files/Noisefloor.wav?download=1",
+        "md5": "0fb217d72252ff604a24495e163ac9d7",
+        "label": "no_drone",
+        "distance_m": null
+      }
+    ]
+  },
+  "optional": {
+    "esc50": {
+      "url": "https://github.com/karolpiczak/ESC-50/archive/master.zip",
+      "approx_download_mb": 600,
+      "default": false
+    },
+    "ddl_real": {
+      "record": "https://zenodo.org/records/6459183",
+      "url": "https://zenodo.org/records/6459183/files/MLSP_2022_Real_Data.zip?download=1",
+      "approx_download_gb": 12.6,
+      "default": false
+    },
+    "auralizations_10_50m": {
+      "record": "https://zenodo.org/records/13754746",
+      "default": false,
+      "note": "7z+MP3 omitted from first automation to avoid extra decoder dependencies."
+    }
+  }
+}
