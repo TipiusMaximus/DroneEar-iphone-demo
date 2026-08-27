@@ -156,6 +156,57 @@
     };
   }
 
+  // Octave / harmonic-collapse preference (mirrors Python reference_detector).
+  // When best f0 is ~2x or ~3x a competitive lower candidate, prefer lower f0.
+  const OCTAVE_DEFAULTS = {
+    octaveScoreMargin: 0.05,
+    octaveScoreRatio: 0.92,
+    octaveRelTol: 0.04,
+    octaveBinTol: 2.0,
+    octaveMultiples: [2, 3],
+    octaveApplyAboveHz: 200.0,
+  };
+
+  function preferLowerOctaveCandidate(scored, best, cfg, binHz) {
+    if (!best || !scored.length) return best;
+    const margin = cfg.octaveScoreMargin != null ? cfg.octaveScoreMargin : OCTAVE_DEFAULTS.octaveScoreMargin;
+    const ratio = cfg.octaveScoreRatio != null ? cfg.octaveScoreRatio : OCTAVE_DEFAULTS.octaveScoreRatio;
+    const relTol = cfg.octaveRelTol != null ? cfg.octaveRelTol : OCTAVE_DEFAULTS.octaveRelTol;
+    const binTol = cfg.octaveBinTol != null ? cfg.octaveBinTol : OCTAVE_DEFAULTS.octaveBinTol;
+    const multiples = cfg.octaveMultiples || OCTAVE_DEFAULTS.octaveMultiples;
+    const applyAbove = cfg.octaveApplyAboveHz != null ? cfg.octaveApplyAboveHz : OCTAVE_DEFAULTS.octaveApplyAboveHz;
+    const f0Min = cfg.f0 ? cfg.f0[0] : 60;
+    let preferred = best;
+    for (let guard = 0; guard < 3; guard++) {
+      const bestScore = preferred.harmonicScore;
+      const bestF0 = preferred.f0;
+      if (!(bestF0 > 0) || !(bestScore > 0)) break;
+      if (bestF0 <= applyAbove) break;
+      let nxt = preferred;
+      for (let mi = 0; mi < multiples.length; mi++) {
+        const k = multiples[mi];
+        const target = bestF0 / k;
+        if (target < f0Min) continue;
+        const tol = Math.max(relTol * target, binTol * binHz);
+        for (let i = 0; i < scored.length; i++) {
+          const cand = scored[i];
+          if (Math.abs(cand.f0 - target) > tol) continue;
+          const s = cand.harmonicScore;
+          const closeEnough = s >= bestScore - margin || s >= ratio * bestScore;
+          if (!closeEnough) continue;
+          const competitiveStruct =
+            cand.harmonicHits >= preferred.harmonicHits - 1 ||
+            cand.harmonicConsistency >= preferred.harmonicConsistency - 0.17;
+          if (!competitiveStruct && s < bestScore - 0.02) continue;
+          if (cand.f0 < nxt.f0 - 1e-9) nxt = cand;
+        }
+      }
+      if (nxt === preferred) break;
+      preferred = nxt;
+    }
+    return preferred;
+  }
+
   function searchLattice(freqs, power, cfg) {
     const lo = cfg.f0[0], hi = cfg.f0[1];
     const df = freqs[1] - freqs[0] || 1;
@@ -163,11 +214,14 @@
     const above = [];
     for (let i = 0; i < power.length; i++) if (freqs[i] >= lo) above.push(power[i]);
     const noiseFloor = median(above);
+    const scored = [];
     let best = null;
     for (let f0 = lo; f0 <= hi + 1e-9; f0 += step) {
       const cand = evaluateCandidate(freqs, power, f0, cfg, noiseFloor);
+      scored.push(cand);
       if (!best || cand.harmonicScore > best.harmonicScore) best = cand;
     }
+    if (best) best = preferLowerOctaveCandidate(scored, best, cfg, df);
     return best || {
       f0: 0, harmonicHits: 0, harmonicCounted: 0, harmonicConsistency: 0,
       harmonicContrast: 0, harmonicContrastDb: 0, harmonicEnergy: 0,
@@ -296,7 +350,7 @@
 
   const api = {
     EPS, clip01, hann, rfftMag, median, RingBuffer,
-    bandStats, evaluateCandidate, searchLattice, F0Tracker,
+    bandStats, evaluateCandidate, preferLowerOctaveCandidate, searchLattice, F0Tracker,
     mechanicalBandScore, scoreFrame, persistDefaults, persistUpdate, analyzeFrame,
   };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
