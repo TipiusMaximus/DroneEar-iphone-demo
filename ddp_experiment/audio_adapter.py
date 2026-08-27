@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 
 from benchmark.reference_detector import DetectorConfig, load_audio, analyze_clip
+from ddp_experiment.spectral_features import spectral_feature_rows
 
 
 DEFAULT_FEATURES = (
@@ -19,6 +20,22 @@ DEFAULT_FEATURES = (
     "smoothed_score",
     "best_f0",
     "f0_delta",
+    "spectral_centroid_hz",
+    "spectral_flatness",
+    "spectral_flux",
+    "amplitude_envelope",
+    "envelope_delta",
+    "modulation_depth",
+    "sideband_ratio",
+    "low_frequency_share",
+    "high_frequency_share",
+    "band_40_120_ratio",
+    "band_120_250_ratio",
+    "band_250_500_ratio",
+    "band_500_1000_ratio",
+    "band_1000_2000_ratio",
+    "band_2000_4000_ratio",
+    "band_4000_8000_ratio",
 )
 
 
@@ -44,12 +61,16 @@ def detector_rows_for_wav(path, cfg=None):
     return rows, summary
 
 
-def rows_to_feature_series(rows, *, normalized=True):
-    """Convert detector-frame dictionaries into DDP-ready time series.
+def rows_to_feature_series(rows, *, spectral_rows=None, normalized=True):
+    """Convert detector/STFT frame dictionaries into DDP-ready time series.
 
-    DDP is intentionally applied to detector behavior over time, not directly
-    to 16 kHz raw PCM. This keeps delays interpretable in detector-hop units.
-    With the current 1024/16 kHz hop, one DDP delay unit is about 64 ms.
+    DDP is intentionally applied to feature behavior over time, not directly
+    to 16 kHz raw PCM. With the current 1024/16 kHz hop, one DDP delay unit is
+    about 64 ms.
+
+    `spectral_rows` is optional so the original detector-only adapter remains
+    testable. When supplied it adds distance-sensitive band, modulation,
+    sideband and flux features aligned to the same frame grid.
     """
     if not rows:
         return {}
@@ -73,15 +94,33 @@ def rows_to_feature_series(rows, *, normalized=True):
         "f0_delta": f0_delta,
     }
 
+    if spectral_rows:
+        count = min(len(rows), len(spectral_rows))
+        for name in DEFAULT_FEATURES:
+            if name in raw:
+                continue
+            raw[name] = np.asarray(
+                [float(spectral_rows[i].get(name, 0.0)) for i in range(count)],
+                dtype=float,
+            )
+        # Keep every feature on the same aligned grid if a caller supplied a
+        # shorter spectral stream.
+        if count < len(rows):
+            raw = {name: values[:count] for name, values in raw.items()}
+
     if not normalized:
         return raw
 
-    # The research question is temporal structure, not which feature has the
-    # largest physical units. Robust within-clip scaling makes DDP signatures
-    # more comparable across f0 Hz, contrast dB, RMS and bounded scores.
     return {name: robust_zscore(values) for name, values in raw.items()}
 
 
 def wav_to_ddp_features(path, cfg=None, *, normalized=True):
-    rows, summary = detector_rows_for_wav(Path(path), cfg)
-    return rows_to_feature_series(rows, normalized=normalized), summary
+    cfg = cfg or DetectorConfig()
+    _, samples = load_audio(Path(path), cfg.sample_rate)
+    detector_rows, summary = analyze_clip(samples, cfg)
+    spectral_rows = spectral_feature_rows(samples, detector_rows, cfg)
+    return rows_to_feature_series(
+        detector_rows,
+        spectral_rows=spectral_rows,
+        normalized=normalized,
+    ), summary
