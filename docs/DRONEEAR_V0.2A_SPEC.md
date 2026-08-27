@@ -1012,7 +1012,7 @@ until a labeled validation dataset and calibration process exist.
 
 ## 23. v0.2a Definition of Done
 
-V0.2a is complete when:
+v0.2a is complete when:
 
 - [ ] analyzer uses 4096 real rolling samples;
 - [ ] analysis updates using overlapping windows;
