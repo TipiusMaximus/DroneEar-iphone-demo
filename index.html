@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="theme-color" content="#0b1220" />
-  <title>DroneEar — iPhone demo</title>
+  <title>DroneEar v0.2a</title>
   <style>
     :root {
       --bg: #0b1220;
@@ -15,7 +15,6 @@
       --clear: #3dd68c;
       --possible: #f5c542;
       --detected: #ff5d5d;
-      --line: #223049;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
@@ -35,31 +34,44 @@
     .val { font-variant-numeric: tabular-nums; font-weight: 600; }
     .meter { height: 12px; background: #1a2438; border-radius: 999px; overflow: hidden; }
     .meter > span { display: block; height: 100%; width: 0%; background: linear-gradient(90deg, #3dd68c, #f5c542, #ff5d5d); }
-    canvas { width: 100%; height: 120px; background: var(--card); border-radius: 14px; margin-top: 16px; }
+    canvas { width: 100%; height: 140px; background: var(--card); border-radius: 14px; margin-top: 16px; }
     button {
       width: 100%; margin-top: 18px; padding: 16px; border: 0; border-radius: 14px;
       background: #3b82f6; color: white; font-size: 1.05rem; font-weight: 700;
     }
     button.stop { background: #4b5568; }
-    button:disabled { opacity: 0.5; }
     .note { margin-top: 14px; color: var(--muted); font-size: 0.78rem; line-height: 1.4; }
     .err { color: var(--detected); font-size: 0.9rem; margin-top: 12px; }
+    details.debug {
+      margin-top: 16px; background: var(--card); border-radius: 14px; padding: 10px 14px;
+    }
+    details.debug summary { color: var(--muted); font-size: 0.82rem; cursor: pointer; }
+    #dbg {
+      margin: 10px 0 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem; line-height: 1.45; color: #c5d4ee; white-space: pre;
+    }
   </style>
 </head>
 <body>
-  <h1>DroneEar</h1>
-  <p class="sub">iPhone-demo. Sama DSP-heuristiikka kuin v0.1: ei todennäköisyys, ääni ei tallennu.</p>
+  <h1>DroneEar v0.2a</h1>
+  <p class="sub">iPhone-demo. 4096 näytteen rolling FFT + harmoni-hila. Score ei ole todennäköisyys. Ääni ei tallennu.</p>
   <div id="state" class="badge CLEAR">CLEAR</div>
-  <div class="row"><span class="label">Score</span><span class="val" id="score">0</span></div>
+  <div class="row"><span class="label">Drone score</span><span class="val" id="score">0</span></div>
   <div class="meter"><span id="bar"></span></div>
-  <div class="row"><span class="label">Taso</span><span class="val" id="rms">0.000</span></div>
-  <canvas id="spec" width="600" height="240"></canvas>
+  <div class="row"><span class="label">best f0</span><span class="val" id="f0">—</span></div>
+  <canvas id="spec" width="600" height="280"></canvas>
   <button id="btn" type="button">Käynnistä mikki</button>
   <p class="err" id="err" hidden></p>
-  <p class="note">Safari pyytää mikrofonin. 60 Hz high-pass poistaa ruminaa spektristä. Pidä puhelin paikallaan 2 s, jos score nousee. Tämä ei ole kenttävalmis ilmaisin.</p>
+  <details class="debug">
+    <summary>Debug</summary>
+    <pre id="dbg">ei käynnissä</pre>
+  </details>
+  <p class="note">Safari pyytää mikrofonin. Alle 60 Hz hylätään taajuustasossa. Pidä puhelin paikallaan. Tämä ei ole kenttävalmis ilmaisin.</p>
+<script src="dsp.js"></script>
 <script>
+const D = DroneEarDSP;
 const CFG = {
-  fftSize: 2048,
+  fftSize: 4096,
   highpassHz: 60,
   possible: 0.55,
   detected: 0.72,
@@ -67,296 +79,122 @@ const CFG = {
   clear: 0.45,
   clearS: 3.0,
   smooth: 0.35,
-  nPeaks: 12,
   nHarmonics: 6,
-  minDistHz: 20,
   f0: [60, 400],
+  f0StepHz: 0,
+  harmonicTolHz: 8,
+  harmonicTolFrac: 0.04,
+  hitMargin: 2.5,
+  minHitPower: 1e-18,
+  silenceRms: 8e-4,
+  trackSeconds: 1.5,
+  trackMinScore: 0.22,
   bands: { low: [60, 250], mid: [250, 2000], high: [2000, 8000] },
-  weights: { hr: 0.28, hc: 0.28, sp: 0.14, band: 0.12, peak: 0.10, stab: 0.08 },
+  candW: { energy: 0.35, consistency: 0.40, contrast: 0.25 },
+  scoreW: { harmonic: 0.40, contrast: 0.20, consistency: 0.15, track: 0.15, band: 0.10 },
 };
 
-function clip01(v) { return !isFinite(v) ? 0 : Math.min(1, Math.max(0, v)); }
-function hann(n) {
-  const w = new Float64Array(n);
-  for (let i = 0; i < n; i++) w[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / n));
-  return w;
-}
-function biquadHP(fc, fs, Q) {
-  const w0 = 2 * Math.PI * fc / fs;
-  const cosw = Math.cos(w0), sinw = Math.sin(w0);
-  const alpha = sinw / (2 * Q);
-  const b0 = (1 + cosw) / 2, b1 = -(1 + cosw), b2 = (1 + cosw) / 2;
-  const a0 = 1 + alpha, a1 = -2 * cosw, a2 = 1 - alpha;
-  return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 };
-}
-function sosfilt(sos, x) {
-  const y = x.slice();
-  for (const s of sos) {
-    let z1 = 0, z2 = 0;
-    for (let i = 0; i < y.length; i++) {
-      const xi = y[i];
-      const yi = s.b0 * xi + z1;
-      z1 = s.b1 * xi - s.a1 * yi + z2;
-      z2 = s.b2 * xi - s.a2 * yi;
-      y[i] = yi;
-    }
-  }
-  return y;
-}
-function highpassFrame(samples, sr, fc) {
-  if (!fc || fc <= 0) return samples;
-  const sos = [biquadHP(fc, sr, 0.541196100146197), biquadHP(fc, sr, 1.3065629648763766)];
-  const fwd = sosfilt(sos, samples);
-  fwd.reverse();
-  const back = sosfilt(sos, fwd);
-  back.reverse();
-  return back;
-}
-function fftRadix2(re, im) {
-  const n = re.length;
-  for (let i = 1, j = 0; i < n; i++) {
-    let bit = n >> 1;
-    for (; j & bit; bit >>= 1) j ^= bit;
-    j ^= bit;
-    if (i < j) { let t = re[i]; re[i] = re[j]; re[j] = t; t = im[i]; im[i] = im[j]; im[j] = t; }
-  }
-  for (let len = 2; len <= n; len <<= 1) {
-    const ang = -2 * Math.PI / len;
-    const wr = Math.cos(ang), wi = Math.sin(ang);
-    for (let i = 0; i < n; i += len) {
-      let cr = 1, ci = 0;
-      for (let j = 0; j < len / 2; j++) {
-        const ur = re[i + j], ui = im[i + j];
-        const vr = re[i + j + len / 2] * cr - im[i + j + len / 2] * ci;
-        const vi = re[i + j + len / 2] * ci + im[i + j + len / 2] * cr;
-        re[i + j] = ur + vr; im[i + j] = ui + vi;
-        re[i + j + len / 2] = ur - vr; im[i + j + len / 2] = ui - vi;
-        const ncr = cr * wr - ci * wi;
-        ci = cr * wi + ci * wr;
-        cr = ncr;
-      }
-    }
-  }
-}
-function rfftMag(frame) {
-  const n = frame.length;
-  const re = new Float64Array(n), im = new Float64Array(n);
-  for (let i = 0; i < n; i++) re[i] = frame[i];
-  fftRadix2(re, im);
-  const mag = new Float64Array(n / 2 + 1);
-  for (let i = 0; i <= n / 2; i++) mag[i] = Math.hypot(re[i], im[i]);
-  return mag;
-}
-function bandEnergy(freqs, mag, lo, hi) {
-  let s = 0;
-  for (let i = 0; i < mag.length; i++) if (freqs[i] >= lo && freqs[i] < hi) s += mag[i];
-  return s;
-}
-function peaks(freqs, mag, nPeaks, minHz) {
-  const df = freqs[1] - freqs[0] || 1;
-  const dist = Math.max(1, Math.floor(minHz / Math.max(df, 1e-6)));
-  const sorted = mag.slice().sort((a, b) => a - b);
-  const median = sorted[Math.floor(sorted.length / 2)] || 0;
-  const maxv = mag.reduce((a, b) => Math.max(a, b), 0);
-  const prom = Math.max(median * 3, maxv * 0.06, 1e-12);
-  const idx = [];
-  for (let i = dist; i < mag.length - dist; i++) {
-    let isPeak = mag[i] >= mag[i - 1] && mag[i] >= mag[i + 1];
-    if (!isPeak) continue;
-    let left = mag[i], right = mag[i];
-    for (let k = 1; k <= dist; k++) {
-      if (mag[i - k] > mag[i]) { isPeak = false; break; }
-      left = Math.min(left, mag[i - k]);
-      right = Math.min(right, mag[i + k]);
-    }
-    if (!isPeak) continue;
-    if (mag[i] - Math.max(left, right) < prom * 0.15 && mag[i] < prom) continue;
-    if (idx.length && i - idx[idx.length - 1] < dist) {
-      if (mag[i] > mag[idx[idx.length - 1]]) idx[idx.length - 1] = i;
-    } else idx.push(i);
-  }
-  if (!idx.length) {
-    let m = 0;
-    for (let i = 1; i < mag.length; i++) if (mag[i] > mag[m]) m = i;
-    if (mag[m] <= 0) return [];
-    return [freqs[m]];
-  }
-  idx.sort((a, b) => mag[b] - mag[a]);
-  const chosen = idx.slice(0, nPeaks).sort((a, b) => a - b);
-  return chosen.map(i => freqs[i]);
-}
-function harmonicMeasures(freqs, mag, peakFreqs) {
-  const total = mag.reduce((a, b) => a + b, 0) + 1e-12;
-  if (!peakFreqs.length) return [0, 0, 0];
-  const sorted = peakFreqs.slice().sort((a, b) => a - b);
-  let spacing = 0;
-  if (sorted.length >= 2) {
-    const diffs = [];
-    for (let i = 1; i < sorted.length; i++) if (sorted[i] - sorted[i - 1] > 15) diffs.push(sorted[i] - sorted[i - 1]);
-    diffs.sort((a, b) => a - b);
-    if (diffs.length) spacing = diffs[Math.floor(diffs.length / 2)];
-  }
-  const candidates = [];
-  if (spacing > 15 && spacing < 800) {
-    candidates.push(spacing);
-    if (spacing > 80) candidates.push(spacing / 2);
-  }
-  for (const f of peakFreqs) if (f >= CFG.f0[0] && f <= CFG.f0[1]) candidates.push(f);
-  if (!candidates.length) candidates.push(peakFreqs[0]);
-  const nyquist = freqs[freqs.length - 1] || 0;
-  let bestCombo = -1, best = [0, 0, spacing];
-  for (const f0 of candidates) {
-    if (f0 < 30 || f0 > 600) continue;
-    let energy = 0, hits = 0, counted = 0;
-    for (let k = 1; k <= CFG.nHarmonics; k++) {
-      const target = k * f0;
-      if (target >= nyquist) break;
-      counted++;
-      const bw = Math.max(8, f0 * 0.05);
-      for (let i = 0; i < freqs.length; i++) {
-        if (freqs[i] >= target - bw && freqs[i] <= target + bw) energy += mag[i];
-      }
-      if (peakFreqs.some(p => Math.abs(p - target) <= bw)) hits++;
-    }
-    if (!counted) continue;
-    const ratio = Math.min(1, energy / total);
-    const cons = hits / counted;
-    const combo = 0.55 * ratio + 0.45 * cons;
-    if (combo > bestCombo) { bestCombo = combo; best = [ratio, cons, f0]; }
-  }
-  return best;
-}
-function scoreFeatures(f) {
-  const w = CFG.weights;
-  const rmsGate = clip01((f.rms - 5e-4) / 0.03);
-  const n = f.peakCount;
-  let peakScore = n <= 1 ? 0.08 : n <= 8 ? 0.35 + 0.65 * (n - 2) / 6 : Math.max(0, 1 - 0.12 * (n - 8));
-  const bandMech = clip01(f.bandLow + f.bandMid);
-  const bandScore = clip01(bandMech * (1 - 0.65 * f.bandHigh));
-  let spacingScore = (CFG.f0[0] <= f.spacing && f.spacing <= 500) ? 1 : 0.25;
-  if (f.consistency < 0.35) spacingScore *= 0.4;
-  const stability = 1 / (1 + 4 * Math.max(0, f.flux));
-  const raw =
-    w.hr * clip01(f.ratio) +
-    w.hc * clip01(f.consistency) +
-    w.sp * spacingScore +
-    w.band * bandScore +
-    w.peak * clip01(peakScore) +
-    w.stab * clip01(stability);
-  return clip01(rmsGate * raw);
-}
+const WIN = D.hann(CFG.fftSize);
+const ring = new D.RingBuffer(CFG.fftSize);
+const tracker = new D.F0Tracker(CFG);
+const persist = D.persistDefaults();
 
-const persist = { state: "CLEAR", sm: 0, init: false, high: 0, low: 0 };
-function persistUpdate(score, dt) {
-  const sIn = clip01(score);
-  dt = Math.max(0, dt);
-  persist.sm = persist.init ? CFG.smooth * sIn + (1 - CFG.smooth) * persist.sm : sIn;
-  persist.init = true;
-  const s = persist.sm;
-  if (persist.state === "CLEAR") {
-    persist.low = 0;
-    if (s >= CFG.possible) {
-      persist.state = "POSSIBLE";
-      persist.high = s >= CFG.detected ? persist.high + dt : 0;
-    } else persist.high = 0;
-  } else if (persist.state === "POSSIBLE") {
-    if (s >= CFG.detected) {
-      persist.high += dt; persist.low = 0;
-      if (persist.high >= CFG.detectedS) { persist.state = "DETECTED"; persist.low = 0; }
-    } else if (s >= CFG.possible) {
-      persist.high = 0; persist.low = 0;
-    } else {
-      persist.high = 0; persist.state = "CLEAR"; persist.low = 0;
-    }
-  } else if (persist.state === "DETECTED") {
-    if (s < CFG.clear) {
-      persist.low += dt;
-      if (persist.low >= CFG.clearS) { persist.state = "CLEAR"; persist.high = 0; persist.low = 0; }
-    } else persist.low = 0;
-  }
-  return persist;
-}
-
-const WIN = hann(CFG.fftSize);
-let prevMag = null, lastT = 0, running = false, ctx = null, proc = null, stream = null, srcNode = null;
+let lastT = 0, running = false, ctx = null, proc = null, stream = null, srcNode = null;
+let lastDbg = null;
 
 const el = {
   state: document.getElementById("state"),
   score: document.getElementById("score"),
   bar: document.getElementById("bar"),
-  rms: document.getElementById("rms"),
+  f0: document.getElementById("f0"),
   err: document.getElementById("err"),
   btn: document.getElementById("btn"),
   spec: document.getElementById("spec"),
+  dbg: document.getElementById("dbg"),
 };
 const g = el.spec.getContext("2d");
 
-function drawSpec(mag, freqs, sr) {
+function drawSpec(power, freqs, sr, targets) {
   const w = el.spec.width, h = el.spec.height;
   g.fillStyle = "#121a2b"; g.fillRect(0, 0, w, h);
-  const nEnd = Math.min(mag.length, Math.floor(mag.length * 8000 / (sr / 2)));
+  const nEnd = Math.min(power.length, Math.floor(power.length * 8000 / (sr / 2)));
   let start = 1;
   while (start < nEnd && freqs[start] < CFG.highpassHz) start++;
-  let mx = 1e-9;
-  for (let i = start; i < nEnd; i++) mx = Math.max(mx, mag[i]);
+  let mx = 1e-18;
+  for (let i = start; i < nEnd; i++) mx = Math.max(mx, power[i]);
   g.beginPath();
   g.strokeStyle = "#7dd3fc";
   g.lineWidth = 2;
   const span = Math.max(1, nEnd - 1 - start);
   for (let x = 0; x < w; x++) {
     const i = start + Math.floor((x / w) * span);
-    const y = h - 8 - (Math.log10(1 + 9 * mag[i] / mx) * (h - 16));
+    const y = h - 8 - (Math.log10(1 + 9 * power[i] / mx) * (h - 16));
     if (x === 0) g.moveTo(x, y); else g.lineTo(x, y);
   }
   g.stroke();
+  if (targets && targets.length) {
+    g.strokeStyle = "rgba(245,197,66,0.85)";
+    g.lineWidth = 1;
+    const fStart = freqs[start], fEnd = freqs[nEnd - 1];
+    for (const f of targets) {
+      if (f < fStart || f > fEnd) continue;
+      const x = ((f - fStart) / (fEnd - fStart)) * w;
+      g.beginPath(); g.moveTo(x, 6); g.lineTo(x, h - 6); g.stroke();
+    }
+  }
 }
 
-function analyze(samples, sr, dt) {
-  const n = CFG.fftSize;
-  const raw = new Float64Array(n);
-  const take = Math.min(samples.length, n);
-  const off = samples.length - take;
-  for (let i = 0; i < take; i++) raw[i] = samples[off + i];
-  const hp = highpassFrame(raw, sr, CFG.highpassHz);
-  let rms = 0;
-  for (let i = 0; i < hp.length; i++) rms += hp[i] * hp[i];
-  rms = Math.sqrt(rms / Math.max(1, hp.length));
-  const frame = new Float64Array(n);
-  for (let i = 0; i < n; i++) frame[i] = hp[i] * WIN[i];
-  const mag = rfftMag(frame);
-  const freqs = new Float64Array(mag.length);
-  for (let i = 0; i < mag.length; i++) freqs[i] = i * sr / n;
-  if (CFG.highpassHz > 0) {
-    for (let i = 0; i < mag.length; i++) if (freqs[i] < CFG.highpassHz) mag[i] = 0;
-  }
-  let magSum = 1e-12, centroid = 0;
-  for (let i = 0; i < mag.length; i++) { magSum += mag[i]; centroid += freqs[i] * mag[i]; }
-  centroid /= magSum;
-  let flux = 0;
-  if (prevMag && prevMag.length === mag.length) {
-    for (let i = 0; i < mag.length; i++) flux += Math.max(0, mag[i] - prevMag[i]);
-    flux /= magSum;
-  }
-  prevMag = mag;
-  const low = bandEnergy(freqs, mag, ...CFG.bands.low);
-  const mid = bandEnergy(freqs, mag, ...CFG.bands.mid);
-  const high = bandEnergy(freqs, mag, ...CFG.bands.high);
-  const bands = low + mid + high + 1e-12;
-  const pf = peaks(freqs, mag, CFG.nPeaks, CFG.minDistHz);
-  const [ratio, cons, spacing] = harmonicMeasures(freqs, mag, pf);
-  const feat = {
-    rms, flux, ratio, consistency: cons, spacing,
-    bandLow: low / bands, bandMid: mid / bands, bandHigh: high / bands,
-    peakCount: pf.length,
-  };
-  const sc = scoreFeatures(feat);
-  const snap = persistUpdate(sc, dt);
+function fmt(n, d) {
+  if (!isFinite(n)) return "—";
+  return Number(n).toFixed(d);
+}
+
+function renderDbg(d) {
+  el.dbg.textContent =
+    "sampleRate        " + d.sr + " Hz\n" +
+    "FFT               " + CFG.fftSize + "\n" +
+    "resolution        " + fmt(d.df, 2) + " Hz\n" +
+    "RMS               " + fmt(d.rms, 4) + "\n" +
+    "best f0           " + fmt(d.f0, 1) + " Hz\n" +
+    "harmonic hits     " + d.hits + " / " + d.counted + "\n" +
+    "consistency       " + fmt(d.cons, 2) + "\n" +
+    "contrast          " + fmt(d.contrastDb, 1) + " dB\n" +
+    "harmonic score    " + fmt(d.hScore, 2) + "\n" +
+    "track stability   " + fmt(d.track, 2) + "\n" +
+    "band L/M/H        " + fmt(d.l, 2) + " / " + fmt(d.m, 2) + " / " + fmt(d.h, 2) + "\n" +
+    "raw score         " + fmt(d.raw, 2) + "\n" +
+    "smoothed score    " + fmt(d.sm, 2) + "\n" +
+    "state             " + d.state;
+}
+
+function analyzeReady(samples, sr, dt, now) {
+  const spec = D.analyzeFrame(samples, sr, CFG, WIN);
+  const L = spec.lattice;
+  const track = tracker.update(now, L.f0, L.harmonicScore);
+  const bandScore = D.mechanicalBandScore(spec.bandLowRatio, spec.bandMidRatio, spec.bandHighRatio);
+  const raw = D.scoreFrame({
+    harmonicScore: L.harmonicScore,
+    harmonicContrast: L.harmonicContrast,
+    harmonicConsistency: L.harmonicConsistency,
+    trackStability: track,
+    bandScore: bandScore,
+  }, CFG, spec.rms);
+  const snap = D.persistUpdate(persist, raw, dt, CFG);
   el.score.textContent = Math.round(snap.sm * 100);
   el.bar.style.width = (snap.sm * 100).toFixed(1) + "%";
-  el.rms.textContent = rms.toFixed(3);
+  el.f0.textContent = L.f0 ? (L.f0.toFixed(0) + " Hz") : "—";
   el.state.textContent = snap.state;
   el.state.className = "badge " + snap.state;
-  drawSpec(mag, freqs, sr);
+  drawSpec(spec.power, spec.freqs, sr, L.targets);
+  lastDbg = {
+    sr, df: spec.df, rms: spec.rms, f0: L.f0,
+    hits: L.harmonicHits, counted: L.harmonicCounted,
+    cons: L.harmonicConsistency, contrastDb: L.harmonicContrastDb,
+    hScore: L.harmonicScore, track,
+    l: spec.bandLowRatio, m: spec.bandMidRatio, h: spec.bandHighRatio,
+    raw, sm: snap.sm, state: snap.state,
+  };
+  renderDbg(lastDbg);
 }
 
 async function start() {
@@ -380,18 +218,24 @@ async function start() {
     buf.connect(silent);
     silent.connect(ctx.destination);
     lastT = ctx.currentTime;
+    ring.reset();
+    tracker.reset();
+    persist.state = "CLEAR"; persist.sm = 0; persist.init = false; persist.high = 0; persist.low = 0;
     buf.onaudioprocess = (ev) => {
       if (!running) return;
       const data = ev.inputBuffer.getChannelData(0);
-      const copy = new Float32Array(data);
+      const ready = ring.push(data);
       const now = ctx.currentTime;
       const dt = Math.max(0.001, now - lastT);
       lastT = now;
-      analyze(copy, ev.inputBuffer.sampleRate, dt);
+      if (!ready) {
+        el.dbg.textContent = "täytetään 4096 näytteen bufferia…";
+        return;
+      }
+      analyzeReady(ring.snapshot(), ev.inputBuffer.sampleRate, dt, now);
     };
     proc = buf;
     running = true;
-    persist.state = "CLEAR"; persist.sm = 0; persist.init = false; persist.high = 0; persist.low = 0; prevMag = null;
     el.btn.textContent = "Pysäytä";
     el.btn.classList.add("stop");
   } catch (e) {
