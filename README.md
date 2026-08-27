@@ -41,7 +41,7 @@ Or PowerShell:
 
 ```powershell
 py -3 -m venv .venv
-\.venv\Scripts\Activate.ps1
+.\.venv\Scripts\Activate.ps1
 python -m pip install -U pip
 pip install -r requirements-benchmark.txt
 python tools\run_all.py --profile synthetic
