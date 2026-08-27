@@ -20,6 +20,7 @@ Do not retune JS thresholds just to match Python unless a real bug appears (for 
 | Final score weights | 0.40 / 0.20 / 0.15 / 0.15 / 0.10 | 0.40 / 0.20 / 0.15 / 0.15 / 0.10 |
 | Persistence | POSSIBLE 0.55, DETECTED 0.72 for 2 s, CLEAR 0.45 for 3 s, smooth 0.35 | same |
 | Candidate mix | energy 0.35, consistency 0.40, contrast 0.25 | same mix, then extra coverage gate |
+| Octave / harmonic-collapse preference | After max `harmonicScore`, if a ~best/2 or ~best/3 candidate scores within margin (`>= best-0.05` or `>= 0.92*best`), within 4% or 2 bins, and winner is `> 200 Hz`, prefer lower f0. Defaults in `OCTAVE_DEFAULTS` inside `dsp.js` (CFG keys optional). | Same rule via `prefer_lower_octave_candidate` + `DetectorConfig.octave_*` |
 
 ## Different (intentional / known)
 
@@ -35,3 +36,9 @@ Do not retune JS thresholds just to match Python unless a real bug appears (for 
 ## Regression to keep
 
 WAV-encoded single 90 Hz sine must stay **not DETECTED**. That was a real Python bug (leakage treated as harmonic hits) and is locked by `tests/test_reference_detector.py`. If JS ever DETECTEDs that fixture, fix JS hit/fraction logic — do not lower Python thresholds to hide it.
+
+## Remaining drift after octave preference
+
+- JS still uses its own hit rule / contrast / coverage (no Python coverage gate, no `h_fraction` gate). Octave folding uses the same numeric margins in both, but candidate *scores* feeding the comparison still differ, so JS and Python may fold on different frames.
+- `index.html` CFG does not list `octave*` keys; `dsp.js` falls back to `OCTAVE_DEFAULTS`. Python always uses `DetectorConfig` fields.
+- Persistence thresholds and the Python sine-leakage hit gate were not changed for this step.
