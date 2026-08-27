@@ -18,7 +18,6 @@ def test_compute_ddp_score_matches_feedback_proxy():
         gain=0.5,
         polarity_rule="fixed_positive",
     )
-    # delayed=[0,0,1,3,6], delayed diff=[0,0,1,2,3]
     expected = np.asarray([0.0, 0.0, 1.5, 4.0, 7.5])
     assert np.allclose(got, expected)
 
@@ -73,9 +72,12 @@ def test_parameter_island_becomes_robust_consensus():
     assert ranked[0]["auc"] == 1.0
 
 
-def test_motif_aggregation_finds_strong_family():
+def test_motif_aggregation_finds_strong_family_on_production_delay_grid():
     rankings = []
-    for delay in (1, 2, 4):
+    # The production motif bucket logic needs enough D values for a family to
+    # contain multiple rows. The previous 3-delay test created singleton
+    # short/mid/long families and could never become motif_strong.
+    for delay in (1, 2, 4, 8, 16):
         for gain in (0.0, 0.5, 1.0):
             rankings.append(
                 {
