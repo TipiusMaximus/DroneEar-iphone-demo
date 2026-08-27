@@ -7,7 +7,7 @@ Python: 3.13 + numpy 2.5.2 + scipy 1.18.1 + pytest 9.1.1. Detector: `benchmark/r
 ## Offline tests
 
 ```text
-10 passed in 16.36s
+10 passed in 16.74s
 ```
 
 Command:
@@ -22,7 +22,7 @@ Verified regression cases:
 - 80–110 Hz slowly changing harmonic signal -> DETECTED, f0 93.8 Hz
 - single 90 Hz sine WAV -> CLEAR (p95 0.130)
 - white noise -> CLEAR (p95 0.233)
-- AM noise -> CLEAR (p95 0.247)
+- AM noise -> CLEAR (p95 0.249)
 - scores stay within 0..1
 - synthetic manifest builds correctly
 
@@ -44,35 +44,59 @@ Node `test_v02a.js` (browser math in `dsp.js`): harmonic f0 91.25 Hz, 6/6 hits, 
 WAV -> manifest -> detector -> results.csv -> summary.md
 ```
 
-This run (`outputs/synthetic/summary.md`):
+This run (`outputs/synthetic/summary.md`) — **AFTER** low-f0 / octave-collapse preference:
 
 ```text
 | category                 | p95   | max   | state    | f0   | consistency | contrast dB | track |
 | synthetic_harmonic       | 1.000 | 1.000 | DETECTED | 89.8 | 1.00        | 43.2        | 1.00  |
 | synthetic_harmonic_sweep | 1.000 | 1.000 | DETECTED | 93.8 | 1.00        | 42.3        | 1.00  |
 | single_sine              | 0.130 | 0.130 | CLEAR    | 62.5 | 0.00        | -2.4        | 0.20  |
-| white_noise              | 0.233 | 0.243 | CLEAR    | 62.5 | 0.25        | 1.9         | 0.20  |
-| am_noise                 | 0.247 | 0.397 | CLEAR    | 74.2 | 0.33        | 2.7         | 0.20  |
+| white_noise              | 0.233 | 0.243 | CLEAR    | 62.5 | 0.25        | 1.7         | 0.20  |
+| am_noise                 | 0.249 | 0.397 | CLEAR    | 74.2 | 0.33        | 2.7         | 0.20  |
 ```
 
-False-positive DETECTED negatives: **0**. Real drone clips not DETECTED: **0** (synthetic-only set).
+Vs before: essentially unchanged (white/AM f0 noise within a bin or two). False-positive DETECTED negatives: **0**.
 
 ## Small-real (Zenodo 7329733)
 
-Network worked. `python tools/run_all.py --profile small-real` downloaded ~83 MB, MD5-checked, mono 16 kHz, 5 s clips, **no peak-normalize**. ESC-50 and DDL were not downloaded.
+Network worked. `python tools/run_all.py --profile small-real` used cached downloads under `data/raw`, MD5-checked, mono 16 kHz, 5 s clips, **no peak-normalize**. ESC-50 and DDL were not downloaded.
 
 Clips: **12**. False-positive DETECTED negatives: **0**. Real drone clips not DETECTED: **6** (all 1/10/30 m clips).
 
+### BEFORE (prior run, no octave preference)
+
 ```text
-| category    | distance | label    | p95   | max   | state    | f0    | consistency | contrast dB | track |
-| drone_noise | 1        | drone    | 0.700 | 0.723 | POSSIBLE | 140.6 | 0.83        | 10.2        | 0.84  |
-| drone_noise | 1        | drone    | 0.717 | 0.755 | POSSIBLE | 144.5 | 0.83        | 9.8         | 1.00  |
-| drone_noise | 10       | drone    | 0.281 | 0.308 | CLEAR    | 363.3 | 0.33        | 7.5         | 0.20  |
-| drone_noise | 10       | drone    | 0.290 | 0.326 | CLEAR    | 285.2 | 0.33        | 8.2         | 0.20  |
-| drone_noise | 30       | drone    | 0.240 | 0.261 | CLEAR    | 281.2 | 0.33        | 4.9         | 0.20  |
-| drone_noise | 30       | drone    | 0.234 | 0.266 | CLEAR    | 281.2 | 0.33        | 4.7         | 0.20  |
-| noise_floor |          | no_drone | 0.236 | 0.404 | CLEAR    | 74.2  | 0.33        | 2.2         | 0.20  |
+| category    | distance | state    | p95   | f0    | consistency |
+| drone_noise | 1        | POSSIBLE | 0.700 | 140.6 | 0.83        |
+| drone_noise | 1        | POSSIBLE | 0.717 | 144.5 | 0.83        |
+| drone_noise | 10       | CLEAR    | 0.281 | 363.3 | 0.33        |
+| drone_noise | 10       | CLEAR    | 0.290 | 285.2 | 0.33        |
+| drone_noise | 30       | CLEAR    | 0.240 | 281.2 | 0.33        |
+| drone_noise | 30       | CLEAR    | 0.234 | 281.2 | 0.33        |
+| noise_floor |          | CLEAR    | 0.236 | 74.2  | 0.33        |
 ```
+
+### AFTER (octave / harmonic-collapse preference)
+
+```text
+| category    | distance | state    | p95   | f0    | consistency | contrast dB | track |
+| drone_noise | 1        | POSSIBLE | 0.700 | 140.6 | 0.83        | 10.2        | 0.84  |
+| drone_noise | 1        | POSSIBLE | 0.717 | 144.5 | 0.83        | 9.8         | 1.00  |
+| drone_noise | 10       | CLEAR    | 0.281 | 363.3 | 0.33        | 7.5         | 0.20  |
+| drone_noise | 10       | CLEAR    | 0.290 | 285.2 | 0.33        | 8.2         | 0.20  |
+| drone_noise | 30       | CLEAR    | 0.240 | 281.2 | 0.33        | 4.9         | 0.20  |
+| drone_noise | 30       | CLEAR    | 0.234 | 281.2 | 0.33        | 4.7         | 0.20  |
+| noise_floor |          | CLEAR    | 0.236 | 66.4  | 0.33        | 2.2         | 0.20  |
+```
+
+### What changed
+
+Implemented low-f0 preference when a ~best/2 or ~best/3 lattice candidate scores nearly as well (`score >= best - 0.05` or `>= 0.92 * best`, within 4% or 2 FFT bins), only when the current winner is above 200 Hz (so a true ~140 Hz 1 m lattice is not halved to ~70 Hz). Mirrored in `dsp.js` `searchLattice`. DETECTED (0.72) and the sine-leakage hit gate (`contrast_db>=6 AND h_fraction>=0.003`) were **not** changed.
+
+Honest outcome:
+
+- **1 m:** no regression (still POSSIBLE, same p95 / f0 / consistency).
+- **10 m / 30 m:** f0 did **not** drop. Per-frame dumps show half-f0 candidates around 140 Hz have **harmonic_score 0** (0 hits) while the weak 280–360 Hz winners only have 2/6 hits. The preference rule correctly does nothing when the lower candidate is not competitive — so the earlier “octave collapse” diagnosis does not hold under the current scoring (coverage gate + hit fraction). High f0 here is “least-bad weak lattice,” not a near-tie with a strong half-f0.
 
 Caveat: research mics, not iPhone. Do not infer iPhone detection range.
 
@@ -92,7 +116,7 @@ and applies a harmonic-coverage gate. A WAV regression test prevents this failur
 
 ## Next smallest detector change
 
-Do **not** lower DETECTED (0.72) and do **not** weaken the sine-leakage fraction gate. 1 m is already on a stable ~140 Hz lattice (5/6 hits, ~10 dB contrast) but p95 0.70 sits 0.02 under DETECTED and `detected_fraction` is 0. 10 m / 30 m collapse to noisefloor scores with unstable high f0 (285–363 Hz, consistency 0.33) — likely harmonic-as-fundamental, not a persistence miss. Next change: a low-f0 / octave-collapse preference when two lattice candidates score similarly. Measure that on these same 1/10/30 m clips before any threshold edit.
+Do **not** lower DETECTED (0.72) and do **not** weaken the sine-leakage fraction gate. Octave preference is in place but does not help 10/30 m because half-f0 scores are zero. Next: a weak-signal f0 estimator that does not rely on the coverage-gated harmonic score alone — e.g. harmonic product spectrum / peak-seeded subharmonic search to propose f0, then score — so distant clips can land in the rotor band when only upper harmonics are audible. Measure on the same 1/10/30 m clips before any threshold edit.
 
 ## Fixtures
 
