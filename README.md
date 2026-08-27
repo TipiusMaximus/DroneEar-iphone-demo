@@ -9,7 +9,7 @@ Selain-DSP, ei ML. **Drone score ei ole todennäköisyys.** Ääntä ei tallenne
 - 4096-sample rolling FFT (about 256 ms at 16 kHz, ~3.9 Hz bins)
 - Power spectrum (`magnitude²`) for energy, ratios, and contrast
 - Bins below 60 Hz ignored (no per-frame IIR high-pass)
-- Harmonic-lattice search for a 60–400 Hz fundamental, up to 6 harmonics
+- Harmonic-lattice search for a 60–400 Hz fundamental, up to 6 harmonics (prefer lower f0 on near-tie octave/harmonic collapse above 200 Hz)
 - Temporal f0 tracking (~1.5 s) so slow RPM drift stays valid and random jumps do not
 - `CLEAR / POSSIBLE / DETECTED` persistence (same thresholds as v0.1)
 - Collapsible debug panel and harmonic markers on the spectrum
@@ -41,7 +41,7 @@ Or PowerShell:
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+\.venv\Scripts\Activate.ps1
 python -m pip install -U pip
 pip install -r requirements-benchmark.txt
 python tools\run_all.py --profile synthetic
