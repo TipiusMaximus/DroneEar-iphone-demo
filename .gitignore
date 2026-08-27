@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+data/raw/
+data/benchmark/
+outputs/
+*.part
+ESC-50-master.zip
+MLSP_2022_Real_Data.zip
