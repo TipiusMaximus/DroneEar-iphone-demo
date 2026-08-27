@@ -11,10 +11,12 @@ class DetectorConfig:
     sample_rate: int = 16000
     n_fft: int = 4096
     hop: int = 1024
-    f0_min: float = 60.0
-    f0_max: float = 400.0
+    # Research branch only: broaden candidate fundamentals so the DDP study is
+    # not locked to the live browser detector's earlier 60–400 Hz assumption.
+    f0_min: float = 40.0
+    f0_max: float = 800.0
     n_harmonics: int = 6
-    min_freq: float = 60.0
+    min_freq: float = 40.0
     max_freq: float = 8000.0
     silence_rms: float = 2e-4
     possible: float = 0.55
@@ -28,17 +30,11 @@ class DetectorConfig:
     weight_consistency: float = 0.15
     weight_track: float = 0.15
     weight_band: float = 0.10
-    # Octave / harmonic-collapse preference: when the top lattice score is at
-    # ~2x or ~3x a competitive lower-f0 candidate, prefer the lower f0 so a
-    # harmonic is not treated as the rotor fundamental.
-    octave_score_margin: float = 0.05   # accept alt if score >= best - margin
-    octave_score_ratio: float = 0.92    # or score >= ratio * best
-    octave_rel_tol: float = 0.04        # f0_alt within 4% of best/k
-    octave_bin_tol: float = 2.0         # or within this many FFT bins
-    octave_multiples: tuple = (2, 3)    # check best/2 and best/3
-    # Only fold a winner that already sits above the rotor band. Otherwise a
-    # true ~140 Hz lattice can be halved to ~70 Hz when 2x scores similarly,
-    # which hurts 1 m tracking without helping 10/30 m (those half-f0s score 0).
+    octave_score_margin: float = 0.05
+    octave_score_ratio: float = 0.92
+    octave_rel_tol: float = 0.04
+    octave_bin_tol: float = 2.0
+    octave_multiples: tuple = (2, 3)
     octave_apply_above_hz: float = 200.0
 
 STATE_RANK = {"CLEAR": 0, "POSSIBLE": 1, "DETECTED": 2}
@@ -48,14 +44,6 @@ def clip01(v):
 
 
 def prefer_lower_octave_candidate(scored, best, cfg, bin_hz):
-    """Prefer lower f0 when it is ~best/2 or ~best/3 and scores nearly as well.
-
-    Concrete rule: after picking the max-harmonicScore candidate, if another
-    candidate at approximately best_f0/k (k in octave_multiples) has
-    score >= best - octave_score_margin OR score >= octave_score_ratio * best,
-    and its hits/consistency are competitive, prefer that lower f0. Repeat a
-    few times so 3x->1.5x-style chains can collapse toward the fundamental.
-    """
     if best is None or not scored:
         return best
     preferred = best
@@ -77,16 +65,12 @@ def prefer_lower_octave_candidate(scored, best, cfg, bin_hz):
                 if abs(f0 - target) > tol:
                     continue
                 s = float(cand["harmonic_score"])
-                close_enough = (
-                    s >= best_score - cfg.octave_score_margin
-                    or s >= cfg.octave_score_ratio * best_score
-                )
+                close_enough = s >= best_score - cfg.octave_score_margin or s >= cfg.octave_score_ratio * best_score
                 if not close_enough:
                     continue
                 competitive_struct = (
                     int(cand["harmonic_hits"]) >= int(preferred["harmonic_hits"]) - 1
-                    or float(cand["harmonic_consistency"])
-                    >= float(preferred["harmonic_consistency"]) - 0.17
+                    or float(cand["harmonic_consistency"]) >= float(preferred["harmonic_consistency"]) - 0.17
                 )
                 if not competitive_struct and s < best_score - 0.02:
                     continue
@@ -140,7 +124,7 @@ def analyze_frame(frame, cfg):
 
     relevant = (freqs >= cfg.min_freq) & (freqs <= min(cfg.max_freq, cfg.sample_rate / 2))
     total_power = float(power[relevant].sum()) + 1e-18
-    mechanical = (freqs >= 60.0) & (freqs <= 2000.0)
+    mechanical = (freqs >= 40.0) & (freqs <= 2000.0)
     mechanical_band_score = clip01(float(power[mechanical].sum()) / total_power)
 
     candidates = freqs[(freqs >= cfg.f0_min) & (freqs <= cfg.f0_max)]
@@ -174,9 +158,6 @@ def analyze_frame(frame, cfg):
             contrast_values.append(contrast_db)
             harmonic_power += h_power
             count += 1
-            # Contrast alone is not enough: FFT leakage or quantization noise can
-            # look locally strong when the surrounding floor is extremely low.
-            # Require each harmonic to carry a minimum fraction of total power.
             if contrast_db >= 6.0 and h_fraction >= 0.003:
                 hits += 1
 
